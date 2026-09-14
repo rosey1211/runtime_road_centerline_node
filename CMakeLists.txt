@@ -5,6 +5,13 @@ project(road_centerline)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
+# Default to an optimized build (-O3 -DNDEBUG) — this is a real-time perception
+# node, and CMAKE_BUILD_TYPE is otherwise empty (-O0) unless set explicitly.
+# Override with --cmake-args -DCMAKE_BUILD_TYPE=Debug for a debug build.
+if(NOT CMAKE_BUILD_TYPE)
+  set(CMAKE_BUILD_TYPE Release)
+endif()
+
 # ── Find dependencies ──────────────────────────────────────────────────────────
 find_package(ament_cmake      REQUIRED)
 find_package(rclcpp            REQUIRED)

@@ -11,9 +11,10 @@
 #include <yaml-cpp/yaml.h>
 
 #include <torch/script.h>
-#include <torch/torch.h>
+#include <torch/cuda.h>
 
-#include <opencv2/opencv.hpp>
+#include <opencv2/core.hpp>
+#include <opencv2/imgproc.hpp>
 
 #include <limits>
 
@@ -501,8 +502,10 @@ public:
         {
             auto fw   = get_parameter("flat_world_yaml").as_string();
             auto intr = get_parameter("intrinsics_yaml").as_string();
-            if (!fw.empty() && !intr.empty() &&
-                std::filesystem::exists(fw) && std::filesystem::exists(intr))
+            bool fw_missing   = !fw.empty()   && !std::filesystem::exists(fw);
+            bool intr_missing = !intr.empty() && !std::filesystem::exists(intr);
+
+            if (!fw.empty() && !intr.empty() && !fw_missing && !intr_missing)
             {
                 // Config not loaded yet; parse image dims first
                 YAML::Node mc = YAML::LoadFile(get_parameter("config_path").as_string());
@@ -514,9 +517,21 @@ public:
                 RCLCPP_INFO(get_logger(),
                     "Flat-world steering enabled  h=%.2f m  pitch=%.2f°  roll=%.2f°  lookahead=%.1f m",
                     extr_.height_m, extr_.pitch_deg, extr_.roll_deg, lookahead_distance_m_);
+            } else if (fw_missing || intr_missing) {
+                RCLCPP_ERROR(get_logger(),
+                    "\n"
+                    "********************************************************************\n"
+                    "***  FLAT-WORLD CALIBRATION FILE(S) NOT FOUND — STEERING DISABLED  ***\n"
+                    "***  flat_world_yaml : %-40s %s\n"
+                    "***  intrinsics_yaml : %-40s %s\n"
+                    "***  steering_curvature will be NaN; desired_speed forced to 0.0.  ***\n"
+                    "********************************************************************",
+                    fw.c_str(),   fw_missing   ? "(MISSING)" : "(ok)",
+                    intr.c_str(), intr_missing ? "(MISSING)" : "(ok)");
             } else {
                 RCLCPP_WARN(get_logger(),
-                    "Flat-world yaml not configured — steering_curvature will be NaN");
+                    "Flat-world yaml not configured — steering_curvature will be NaN "
+                    "and desired_speed will be forced to 0.0");
             }
         }
 
@@ -524,7 +539,11 @@ public:
         RCLCPP_INFO(get_logger(), "Model config: %dx%d  buckets=%d  rows=%d",
             cfg_.image_width, cfg_.image_height, cfg_.n_buckets, cfg_.n_rows);
 
-        model_ = torch::jit::load(get_parameter("model_path").as_string(), torch::kCPU);
+        device_ = torch::cuda::is_available() ? torch::kCUDA : torch::kCPU;
+        RCLCPP_INFO(get_logger(), "Running inference on %s",
+            device_.is_cuda() ? "GPU (CUDA)" : "CPU");
+
+        model_ = torch::jit::load(get_parameter("model_path").as_string(), device_);
         model_.eval();
 
         norm_mean_ = torch::tensor(cfg_.norm_mean).to(torch::kFloat32).reshape({1,3,1,1});
@@ -577,6 +596,7 @@ private:
         for (int c = 0; c < 3; ++c)
             tensor[0][c] = torch::from_blob(ch[c].data, {cfg_.image_height,cfg_.image_width}, torch::kFloat32).clone();
         tensor = (tensor - norm_mean_) / norm_std_;
+        tensor = tensor.to(device_);
 
         // Forward pass
         torch::jit::IValue output;
@@ -598,7 +618,9 @@ private:
         std::vector<std::vector<Peak>> all_peaks(3);
         std::vector<std::vector<float>> row_probs(3);
         for (int r = 0; r < 3; ++r) {
-            auto sig = torch::sigmoid(row_logits[r]);
+            // .data_ptr() reads directly from wherever the tensor lives, so it
+            // must be brought back to host memory first when running on CUDA.
+            auto sig = torch::sigmoid(row_logits[r]).to(torch::kCPU);
             row_probs[r].assign(sig.data_ptr<float>(),
                                  sig.data_ptr<float>() + cfg_.n_buckets);
         }
@@ -686,7 +708,9 @@ private:
         // so it only goes false once the road has been missing for several
         // consecutive frames. At that point: stop (speed 0), hold the last
         // valid steering command for reference, and tell the listener not to
-        // act on steering.
+        // act on steering. The same applies whenever flat-world calibration
+        // isn't loaded — without it, steering_curvature can never be valid,
+        // so it's not safe to command any forward speed either.
         {
             bool have_curvature = !std::isnan(steering_curvature);
             if (have_curvature) {
@@ -695,7 +719,7 @@ private:
             }
 
             control_interfaces::msg::ControlMsg control_msg;
-            if (road_present) {
+            if (road_present && flat_world_loaded_) {
                 control_msg.desired_curvature  = have_curvature ? steering_curvature : 0.0f;
                 control_msg.desired_speed      = static_cast<float>(forward_speed_mps_);
                 control_msg.listen_to_steering = have_curvature;
@@ -967,6 +991,7 @@ private:
 
     // ── Members ───────────────────────────────────────────────────────────────
     ModelConfig cfg_;
+    torch::Device device_ = torch::kCPU;
     torch::jit::script::Module model_;
     torch::Tensor norm_mean_, norm_std_;
 
@@ -1011,7 +1036,7 @@ private:
 };
 
 static const std::string DEFAULT_PARAMS_FILE =
-    "/home/rosey1211/code/road_code/v2/runtime_version/config/road_centerline_params.yaml";
+    "/home/rosey1211/ros2_ws/src/runtime_road_centerline_node/config/road_centerline_params.yaml";
 
 int main(int argc, char ** argv)
 {

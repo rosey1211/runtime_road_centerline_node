@@ -18,6 +18,9 @@
   <depend>control_interfaces</depend>
 
   <exec_depend>rosidl_default_runtime</exec_depend>
+  <exec_depend>launch</exec_depend>
+  <exec_depend>launch_ros</exec_depend>
+  <exec_depend>usb_cam</exec_depend>
 
   <member_of_group>rosidl_interface_packages</member_of_group>
 
