@@ -681,14 +681,32 @@ private:
         // Publish ControlMsg every cycle. listen_to_* tells the downstream
         // control node whether the corresponding field is trustworthy this
         // cycle (valid curvature / road actually detected).
+        //
+        // road_present already reflects the road-momentum grace period above,
+        // so it only goes false once the road has been missing for several
+        // consecutive frames. At that point: stop (speed 0), hold the last
+        // valid steering command for reference, and tell the listener not to
+        // act on steering.
         {
             bool have_curvature = !std::isnan(steering_curvature);
+            if (have_curvature) {
+                last_valid_curvature_      = steering_curvature;
+                have_last_valid_curvature_ = true;
+            }
+
             control_interfaces::msg::ControlMsg control_msg;
-            control_msg.desired_curvature  = have_curvature ?
-                steering_curvature : 0.0f;
-            control_msg.desired_speed      = static_cast<float>(forward_speed_mps_);
-            control_msg.listen_to_steering = have_curvature;
-            control_msg.listen_to_speed    = road_present;
+            if (road_present) {
+                control_msg.desired_curvature  = have_curvature ? steering_curvature : 0.0f;
+                control_msg.desired_speed      = static_cast<float>(forward_speed_mps_);
+                control_msg.listen_to_steering = have_curvature;
+                control_msg.listen_to_speed    = true;
+            } else {
+                control_msg.desired_curvature  = have_last_valid_curvature_ ?
+                    last_valid_curvature_ : 0.0f;
+                control_msg.desired_speed      = 0.0f;
+                control_msg.listen_to_steering = false;
+                control_msg.listen_to_speed    = true;
+            }
             control_pub_->publish(control_msg);
         }
 
@@ -965,6 +983,8 @@ private:
     std::array<double, 3>      prev_cx_frac_ = {-1.0, -1.0, -1.0};
     std::vector<std::vector<Peak>> prev_peaks_;
     float  road_momentum_ = 0.0f;
+    float  last_valid_curvature_      = 0.0f;
+    bool   have_last_valid_curvature_ = false;
 
     // Peak detection parameters
     float temporal_bias_weight_     = 0.1f;
