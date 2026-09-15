@@ -12,6 +12,7 @@
 
 #include <torch/script.h>
 #include <torch/cuda.h>
+#include <ATen/Context.h>
 
 #include <opencv2/core.hpp>
 #include <opencv2/imgproc.hpp>
@@ -543,7 +544,7 @@ public:
         RCLCPP_INFO(get_logger(), "Running inference on %s",
             device_.is_cuda() ? "GPU (CUDA)" : "CPU");
 
-        at::set_flush_denormal(true);   // subnormal weights → 0; prevents 100x CPU slowdown
+        at::globalContext().setFlushDenormal(true);   // subnormal weights → 0; prevents 100x CPU slowdown
         model_ = torch::jit::load(get_parameter("model_path").as_string(), device_);
         model_.eval();
 
