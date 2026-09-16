@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdlib>
 #include <filesystem>
 #include <string>
 #include <vector>
@@ -27,6 +28,19 @@
 
 #include "road_centerline/msg/centerline_result.hpp"
 #include "control_interfaces/msg/control_msg.hpp"
+
+// Expand a leading "~" to $HOME so path parameters (model_path, config_path,
+// flat_world_yaml, intrinsics_yaml) work across machines/users rather than
+// being tied to one hardcoded home directory. Leaves the path unchanged if it
+// doesn't start with "~/" (or is exactly "~") or if $HOME isn't set.
+static std::string expandUserPath(const std::string & path)
+{
+    if (path.empty() || path[0] != '~') return path;
+    if (path.size() > 1 && path[1] != '/') return path;   // e.g. "~otheruser"
+    const char * home = std::getenv("HOME");
+    if (!home) return path;
+    return std::string(home) + path.substr(1);
+}
 
 // ── Colours (BGR for OpenCV) ──────────────────────────────────────────────────
 static const cv::Scalar _PRED  (255, 160,  50);   // blue
@@ -501,15 +515,15 @@ public:
 
         // Flat-world steering (optional)
         {
-            auto fw   = get_parameter("flat_world_yaml").as_string();
-            auto intr = get_parameter("intrinsics_yaml").as_string();
+            auto fw   = expandUserPath(get_parameter("flat_world_yaml").as_string());
+            auto intr = expandUserPath(get_parameter("intrinsics_yaml").as_string());
             bool fw_missing   = !fw.empty()   && !std::filesystem::exists(fw);
             bool intr_missing = !intr.empty() && !std::filesystem::exists(intr);
 
             if (!fw.empty() && !intr.empty() && !fw_missing && !intr_missing)
             {
                 // Config not loaded yet; parse image dims first
-                YAML::Node mc = YAML::LoadFile(get_parameter("config_path").as_string());
+                YAML::Node mc = YAML::LoadFile(expandUserPath(get_parameter("config_path").as_string()));
                 int mw = mc["image_width"].as<int>(), mh = mc["image_height"].as<int>();
                 extr_    = loadExtrinsic(fw);
                 K_model_ = loadAndScaleK(intr, mw, mh);
@@ -536,7 +550,7 @@ public:
             }
         }
 
-        cfg_ = loadConfig(get_parameter("config_path").as_string());
+        cfg_ = loadConfig(expandUserPath(get_parameter("config_path").as_string()));
         RCLCPP_INFO(get_logger(), "Model config: %dx%d  buckets=%d  rows=%d",
             cfg_.image_width, cfg_.image_height, cfg_.n_buckets, cfg_.n_rows);
 
@@ -545,7 +559,7 @@ public:
             device_.is_cuda() ? "GPU (CUDA)" : "CPU");
 
         at::globalContext().setFlushDenormal(true);   // subnormal weights → 0; prevents 100x CPU slowdown
-        model_ = torch::jit::load(get_parameter("model_path").as_string(), device_);
+        model_ = torch::jit::load(expandUserPath(get_parameter("model_path").as_string()), device_);
         model_.eval();
 
         norm_mean_ = torch::tensor(cfg_.norm_mean).to(torch::kFloat32).reshape({1,3,1,1});

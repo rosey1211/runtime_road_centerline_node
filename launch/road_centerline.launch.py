@@ -46,6 +46,12 @@ def generate_launch_description():
         'pixel_format', default_value='yuyv',
         description='usb_cam pixel format — check `v4l2-ctl --list-formats-ext` '
                      'for what your camera actually supports')
+    camera_name_arg = DeclareLaunchArgument(
+        'camera_name', default_value='iphone_camera',
+        description='usb_cam camera_name — labels calibration metadata and sets '
+                     'the default camera_info_url path '
+                     '(~/.ros/camera_info/<camera_name>.yaml) when camera_info_url '
+                     'is not set separately. Not used by road_centerline_node.')
 
     usb_cam_node = Node(
         package='usb_cam',
@@ -58,7 +64,7 @@ def generate_launch_description():
             'image_height': ParameterValue(LaunchConfiguration('image_height'), value_type=int),
             'framerate': ParameterValue(LaunchConfiguration('framerate'), value_type=float),
             'pixel_format': LaunchConfiguration('pixel_format'),
-            'camera_name': 'usb_cam',
+            'camera_name': LaunchConfiguration('camera_name'),
             'frame_id': 'camera',
         }],
     )
@@ -78,6 +84,7 @@ def generate_launch_description():
         image_height_arg,
         framerate_arg,
         pixel_format_arg,
+        camera_name_arg,
         usb_cam_node,
         road_centerline_node,
     ])
