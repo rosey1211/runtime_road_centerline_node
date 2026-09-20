@@ -3,6 +3,7 @@
 // publishes CenterlineResult + a sensor_msgs/Image with visual overlays.
 
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <cstdlib>
 #include <filesystem>
@@ -24,7 +25,13 @@
 #include <sensor_msgs/msg/image.hpp>
 #include <geometry_msgs/msg/point32.hpp>
 #include <geometry_msgs/msg/twist.hpp>
+#if __has_include(<cv_bridge/cv_bridge/cv_bridge.hpp>)
 #include <cv_bridge/cv_bridge/cv_bridge.hpp>
+#elif __has_include(<cv_bridge/cv_bridge.h>)
+#include <cv_bridge/cv_bridge.h>
+#else
+#include <cv_bridge/cv_bridge/cv_bridge.h>
+#endif
 
 #include "road_centerline/msg/centerline_result.hpp"
 #include "control_interfaces/msg/control_msg.hpp"
@@ -587,6 +594,21 @@ public:
 private:
     void imageCallback(const sensor_msgs::msg::Image::SharedPtr msg)
     {
+        // Cycle rate: exponential moving average of instantaneous Hz between
+        // successive calls, logged at most once/sec so it doesn't spam.
+        auto now = std::chrono::steady_clock::now();
+        if (have_last_cycle_time_) {
+            double dt = std::chrono::duration<double>(now - last_cycle_time_).count();
+            if (dt > 0.0) {
+                double inst_hz = 1.0 / dt;
+                cycle_hz_ = (cycle_hz_ == 0.0) ? inst_hz : 0.9 * cycle_hz_ + 0.1 * inst_hz;
+            }
+        }
+        last_cycle_time_ = now;
+        have_last_cycle_time_ = true;
+        RCLCPP_INFO_THROTTLE(get_logger(), *get_clock(), 1000,
+                              "Cycle rate: %.1f Hz", cycle_hz_);
+
         // Convert to BGR OpenCV mat
         cv::Mat bgr;
         try {
@@ -1019,6 +1041,11 @@ private:
     int    min_display_height_;
     int    fork_confirm_frames_;
     int    fork_frame_count_ = 0;
+
+    // Cycle-rate tracking (smoothed Hz, logged at most once per second)
+    std::chrono::steady_clock::time_point last_cycle_time_;
+    bool   have_last_cycle_time_ = false;
+    double cycle_hz_             = 0.0;
 
     // Temporal tracking
     std::array<double, 3>      prev_cx_frac_ = {-1.0, -1.0, -1.0};
