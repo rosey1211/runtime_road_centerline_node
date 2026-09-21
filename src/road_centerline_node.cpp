@@ -502,6 +502,10 @@ public:
         declare_parameter("fork_hint_proximity",       0.20);
         declare_parameter("road_momentum_decay",       0.6);
         declare_parameter("road_momentum_thresh",      0.25);
+        declare_parameter("very_high_confidence_value", 0.4);
+        declare_parameter("maximum_speed",              2.0);
+        declare_parameter("maximum_bias_curvature",     0.1);
+        declare_parameter("maximum_curvature_speed_reduction", 0.5);
 
         road_threshold_      = get_parameter("road_threshold").as_double();
         min_peak_conf_       = get_parameter("min_peak_conf").as_double();
@@ -519,6 +523,11 @@ public:
         fork_hint_proximity_       = static_cast<float>(get_parameter("fork_hint_proximity").as_double());
         road_momentum_decay_       = static_cast<float>(get_parameter("road_momentum_decay").as_double());
         road_momentum_thresh_      = static_cast<float>(get_parameter("road_momentum_thresh").as_double());
+        very_high_confidence_value_ = static_cast<float>(get_parameter("very_high_confidence_value").as_double());
+        maximum_speed_              = static_cast<float>(get_parameter("maximum_speed").as_double());
+        maximum_bias_curvature_     = static_cast<float>(get_parameter("maximum_bias_curvature").as_double());
+        maximum_curvature_speed_reduction_ =
+            static_cast<float>(get_parameter("maximum_curvature_speed_reduction").as_double());
 
         // Flat-world steering (optional)
         {
@@ -697,6 +706,16 @@ private:
                 road_present = true;
             }
         }
+        // No road (momentum exhausted too): confidence reads as exactly zero,
+        // both in the published CenterlineResult and the visual overlay, since
+        // downstream speed determination will key off this value.
+        if (!road_present) mean_conf = 0.0f;
+
+        // mean_conf normalized against the "very high confidence" tier, clipped
+        // to 1.0 so callers get a clean [0,1] fraction for speed determination.
+        float adjusted_mean_conf = (very_high_confidence_value_ > 0.0f)
+            ? std::min(1.0f, mean_conf / very_high_confidence_value_)
+            : 0.0f;
 
         // Fork confirmation: both r1 (mid) and r0 (far) must show 2+ peaks for
         // fork_confirm_frames_ consecutive road-present frames before drawing a fork.
@@ -749,6 +768,7 @@ private:
         // act on steering. The same applies whenever flat-world calibration
         // isn't loaded — without it, steering_curvature can never be valid,
         // so it's not safe to command any forward speed either.
+        float final_desired_speed = 0.0f;
         {
             bool have_curvature = !std::isnan(steering_curvature);
             if (have_curvature) {
@@ -759,7 +779,20 @@ private:
             control_interfaces::msg::ControlMsg control_msg;
             if (road_present && flat_world_loaded_) {
                 control_msg.desired_curvature  = have_curvature ? steering_curvature : 0.0f;
-                control_msg.desired_speed      = static_cast<float>(forward_speed_mps_);
+
+                // Speed = maximum_speed, scaled down by confidence and by how
+                // sharp the turn is. Curvature bias ramps linearly from 1.0
+                // (straight) to (1 - maximum_curvature_speed_reduction) at
+                // maximum_bias_curvature; beyond that the attenuation caps
+                // there rather than continuing to shrink.
+                float curvature_for_speed = have_curvature ? steering_curvature : 0.0f;
+                float abs_curvature = std::fabs(curvature_for_speed);
+                float max_reduction = std::clamp(maximum_curvature_speed_reduction_, 0.0f, 1.0f);
+                float curvature_bias_factor = (maximum_bias_curvature_ > 0.0f)
+                    ? 1.0f - max_reduction * std::min(1.0f, abs_curvature / maximum_bias_curvature_)
+                    : (abs_curvature > 0.0f ? (1.0f - max_reduction) : 1.0f);
+                control_msg.desired_speed = maximum_speed_ * adjusted_mean_conf * curvature_bias_factor;
+
                 control_msg.listen_to_steering = have_curvature;
                 control_msg.listen_to_speed    = true;
             } else {
@@ -769,6 +802,7 @@ private:
                 control_msg.listen_to_steering = false;
                 control_msg.listen_to_speed    = true;
             }
+            final_desired_speed = control_msg.desired_speed;
             control_pub_->publish(control_msg);
         }
 
@@ -800,7 +834,8 @@ private:
                                                        primaryOf(all_peaks[1]).conf,
                                                        primaryOf(all_peaks[2]).conf},
                                    draw_fork,
-                                   steering_curvature, lookahead_img_pt);
+                                   steering_curvature, lookahead_img_pt,
+                                   final_desired_speed, adjusted_mean_conf);
             std_msgs::msg::Header hdr = msg->header;
             auto vis_msg = cv_bridge::CvImage(hdr, "bgr8", vis).toImageMsg();
             visual_pub_->publish(*vis_msg);
@@ -818,7 +853,9 @@ private:
                         const std::vector<float>             & row_confs,
                         bool   draw_fork,
                         float  steering_curvature  = std::numeric_limits<float>::quiet_NaN(),
-                        cv::Point2d lookahead_model = {-1, -1})
+                        cv::Point2d lookahead_model = {-1, -1},
+                        float  desired_speed        = 0.0f,
+                        float  adjusted_mean_conf   = 0.0f)
     {
         // Upscale small images to min_display_height
         cv::Mat canvas = src_bgr.clone();
@@ -993,6 +1030,55 @@ private:
             canvas.colRange(w-border, w)   = _RED;
         }
 
+        // Speed / confidence readout (bottom-right corner)
+        {
+            int    margin    = border + std::max(4, static_cast<int>(std::round(6*s)));
+            int    sq_side   = std::max(8, static_cast<int>(std::round(14*s)));
+            int    gap       = std::max(2, static_cast<int>(std::round(4*s)));
+            double fs_hud    = std::max(0.5, 0.9*s);
+            int    hud_thick = std::max(1, static_cast<int>(std::round(1.5*s)));
+
+            char speed_buf[48], conf_buf[32];
+            if (std::isnan(steering_curvature))
+                std::snprintf(speed_buf, sizeof(speed_buf), "curv=n/a  speed=%.1f", desired_speed);
+            else
+                std::snprintf(speed_buf, sizeof(speed_buf), "curv=%.1f  speed=%.1f",
+                              static_cast<double>(steering_curvature), desired_speed);
+            std::snprintf(conf_buf,  sizeof(conf_buf),  "conf=%.1f",  adjusted_mean_conf);
+
+            int baseline = 0;
+            cv::Size speed_sz = cv::getTextSize(speed_buf, cv::FONT_HERSHEY_PLAIN, fs_hud, hud_thick, &baseline);
+            cv::Size conf_sz  = cv::getTextSize(conf_buf,  cv::FONT_HERSHEY_PLAIN, fs_hud, hud_thick, &baseline);
+
+            int conf_y  = h - margin;
+            int speed_y = conf_y - std::max(sq_side, conf_sz.height) - gap;
+
+            auto drawHudText = [&](const std::string & txt, const cv::Size & sz, int y) {
+                cv::Point org(w - margin - sz.width, y);
+                cv::putText(canvas, txt, org, cv::FONT_HERSHEY_PLAIN, fs_hud,
+                            cv::Scalar(0,0,0), hud_thick+1, cv::LINE_AA);
+                cv::putText(canvas, txt, org, cv::FONT_HERSHEY_PLAIN, fs_hud,
+                            cv::Scalar(255,255,255), hud_thick, cv::LINE_AA);
+                return org;
+            };
+
+            drawHudText(speed_buf, speed_sz, speed_y);
+            cv::Point conf_org = drawHudText(conf_buf, conf_sz, conf_y);
+
+            // Confidence tier: green > 0.7, yellow in [0.4, 0.7], red < 0.4
+            cv::Scalar conf_color = (adjusted_mean_conf > 0.7f)  ? cv::Scalar(0,180,0)
+                                   : (adjusted_mean_conf >= 0.4f) ? cv::Scalar(0,210,210)
+                                                                   : cv::Scalar(0,0,210);
+
+            int text_center_y = conf_org.y - conf_sz.height/2;
+            int sq_right = conf_org.x - gap;
+            int sq_left  = sq_right - sq_side;
+            int sq_top   = text_center_y - sq_side/2;
+            int sq_bottom= sq_top + sq_side;
+            cv::rectangle(canvas, {sq_left, sq_top}, {sq_right, sq_bottom}, conf_color, cv::FILLED, cv::LINE_AA);
+            cv::rectangle(canvas, {sq_left, sq_top}, {sq_right, sq_bottom}, cv::Scalar(0,0,0), 1, cv::LINE_AA);
+        }
+
         // Status bar
         cv::Scalar bar_col = road_present ? cv::Scalar(30,140,30) : cv::Scalar(40,40,160);
         cv::Mat label_bar(lbl_h, w, CV_8UC3, bar_col);
@@ -1015,7 +1101,8 @@ private:
                 label += buf;
             }
         } else {
-            label = "NO ROAD " + std::to_string(static_cast<int>((1-road_prob)*100)) + "%";
+            label = "NO ROAD " + std::to_string(static_cast<int>((1-road_prob)*100)) + "%"
+                  + "  conf:" + std::to_string(static_cast<int>(mean_conf*100)) + "%";
         }
 
         cv::putText(label_bar, label, {std::max(2,static_cast<int>(4*s)), lbl_y},
@@ -1061,6 +1148,12 @@ private:
     float fork_hint_proximity_      = 0.20f;
     float road_momentum_decay_      = 0.6f;
     float road_momentum_thresh_     = 0.25f;
+
+    // Speed determination
+    float very_high_confidence_value_        = 0.4f;
+    float maximum_speed_                     = 2.0f;
+    float maximum_bias_curvature_            = 0.1f;
+    float maximum_curvature_speed_reduction_ = 0.5f;
 
     // Flat-world steering
     bool             flat_world_loaded_ = false;

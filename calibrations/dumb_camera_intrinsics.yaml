@@ -1,0 +1,33 @@
+# DUMMY calibration — not from an actual checkerboard/ChArUco calibration of this
+# camera. Values are plausible for a Logitech C920 at 640x480 (typical fx/fy ~620px,
+# principal point near image center, mild barrel distortion) so loadAndScaleK() has
+# realistic numbers to scale down to the model's working resolution. Good enough to
+# verify the flat-world steering path computes and publishes a curvature — replace
+# with a real calibration (e.g. via camera_calibration/cameracalibrator) before
+# trusting any steering output from it.
+image_width: 640
+image_height: 480
+camera_name: dumb_c920
+camera_matrix:
+  rows: 3
+  cols: 3
+  data: [620.0, 0.0, 320.0,
+         0.0, 620.0, 240.0,
+         0.0, 0.0, 1.0]
+distortion_model: plumb_bob
+distortion_coefficients:
+  rows: 1
+  cols: 5
+  data: [-0.045, 0.03, 0.0, 0.0, 0.0]
+rectification_matrix:
+  rows: 3
+  cols: 3
+  data: [1.0, 0.0, 0.0,
+         0.0, 1.0, 0.0,
+         0.0, 0.0, 1.0]
+projection_matrix:
+  rows: 3
+  cols: 4
+  data: [620.0, 0.0, 320.0, 0.0,
+         0.0, 620.0, 240.0, 0.0,
+         0.0, 0.0, 1.0, 0.0]
