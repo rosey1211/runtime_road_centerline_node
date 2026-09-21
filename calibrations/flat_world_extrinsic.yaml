@@ -1,28 +1,6 @@
 camera_height_m: 0.29
-camera_pitch_deg: !!python/object/apply:numpy.core.multiarray.scalar
-- &id001 !!python/object/apply:numpy.dtype
-  args:
-  - f8
-  - false
-  - true
-  state: !!python/tuple
-  - 3
-  - <
-  - null
-  - null
-  - null
-  - -1
-  - -1
-  - 0
-- !!binary |
-  Io51cRvNGEA=
-camera_roll_deg: !!python/object/apply:numpy.core.multiarray.scalar
-- *id001
-- !!binary |
-  E/JBz2bV+L8=
-camera_yaw_deg: !!python/object/apply:numpy.core.multiarray.scalar
-- *id001
-- !!binary |
-  WKg1zTtOBUA=
+camera_pitch_deg: 6.1579
+camera_roll_deg: -1.5712
+camera_yaw_deg: 2.7489
 camera_x_offset_m: 0.25
 camera_y_offset_m: 0.0
