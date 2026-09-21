@@ -1079,7 +1079,7 @@ private:
 };
 
 static const std::string DEFAULT_PARAMS_FILE =
-    "/home/rosey1211/ros2_ws/src/runtime_road_centerline_node/config/road_centerline_params.yaml";
+    expandUserPath("~/ros2_ws/src/runtime_road_centerline_node/config/road_centerline_params.yaml");
 
 int main(int argc, char ** argv)
 {
