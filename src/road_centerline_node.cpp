@@ -793,14 +793,17 @@ private:
                     : (abs_curvature > 0.0f ? (1.0f - max_reduction) : 1.0f);
                 control_msg.desired_speed = maximum_speed_ * adjusted_mean_conf * curvature_bias_factor;
 
-                control_msg.listen_to_steering = have_curvature;
+                // For now, both flags simply track road detection: trust the
+                // outputs whenever a road is present (and calibrated), ignore
+                // them otherwise.
+                control_msg.listen_to_steering = true;
                 control_msg.listen_to_speed    = true;
             } else {
                 control_msg.desired_curvature  = have_last_valid_curvature_ ?
                     last_valid_curvature_ : 0.0f;
                 control_msg.desired_speed      = 0.0f;
                 control_msg.listen_to_steering = false;
-                control_msg.listen_to_speed    = true;
+                control_msg.listen_to_speed    = false;
             }
             final_desired_speed = control_msg.desired_speed;
             control_pub_->publish(control_msg);
