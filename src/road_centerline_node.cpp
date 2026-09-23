@@ -216,12 +216,16 @@ static void dashedHLine(cv::Mat & img, int y, cv::Scalar color, int dash, int th
         cv::line(img, {x, y}, {std::min(x+dash-1, w-1), y}, color, thickness, cv::LINE_AA);
 }
 
-static void drawBranch(cv::Mat & canvas,
-                       cv::Point p_near, cv::Point p_mid, cv::Point * p_far,
-                       int x_lo, int x_hi, int lw)
+// Returns the exact polyline drawBranch renders (straight near→mid segment,
+// plus the far Bezier when p_far is given) so other markers — e.g. the
+// lookahead point — can be snapped onto the actual drawn curve rather than
+// risking a slightly different independently-computed position.
+static std::vector<cv::Point> sampleBranchCanvas(
+    cv::Point p_near, cv::Point p_mid, const cv::Point * p_far,
+    int x_lo, int x_hi, int canvas_rows)
 {
-    cv::line(canvas, p_near, p_mid, _PRED, lw, cv::LINE_AA);
-    if (!p_far) return;
+    std::vector<cv::Point> pts{p_near, p_mid};
+    if (!p_far) return pts;
 
     cv::Point2d _p2(p_near), _p1(p_mid), _p0(*p_far);
     cv::Point2d seg   = _p1 - _p2;
@@ -249,7 +253,6 @@ static void drawBranch(cv::Mat & canvas,
     x_hi = static_cast<int>(std::min((double)x_hi, pts_x_max + swing));
 
     int n_pts = std::max(20, static_cast<int>(chord_len));
-    std::vector<cv::Point> pts;
     for (int i = 0; i <= n_pts; ++i) {
         double t = static_cast<double>(i) / n_pts;
         double mt = 1.0 - t;
@@ -258,9 +261,17 @@ static void drawBranch(cv::Mat & canvas,
                       + 3*mt*t*t*cp2
                       + t*t*t*_p0;
         int x = std::clamp(static_cast<int>(std::round(p.x)), x_lo, x_hi);
-        int y = std::clamp(static_cast<int>(std::round(p.y)), 0, canvas.rows-1);
+        int y = std::clamp(static_cast<int>(std::round(p.y)), 0, canvas_rows-1);
         pts.push_back({x, y});
     }
+    return pts;
+}
+
+static void drawBranch(cv::Mat & canvas,
+                       cv::Point p_near, cv::Point p_mid, cv::Point * p_far,
+                       int x_lo, int x_hi, int lw)
+{
+    auto pts = sampleBranchCanvas(p_near, p_mid, p_far, x_lo, x_hi, canvas.rows);
     std::vector<std::vector<cv::Point>> contours{pts};
     cv::polylines(canvas, contours, false, _PRED, lw, cv::LINE_AA);
 }
@@ -1013,12 +1024,35 @@ private:
             }
         }
 
-        // Lookahead drive-to point (cyan circle)
+        // Lookahead drive-to point (cyan circle), snapped onto the primary
+        // centerline curve — the same peaks steering actually used — so the
+        // marker always sits exactly on the drawn line rather than floating
+        // slightly off it.
         if (flat_world_loaded_ && road_present && lookahead_model.x >= 0) {
             double scale_x = static_cast<double>(w) / cfg_.image_width;
             double scale_y = static_cast<double>(h) / cfg_.image_height;
-            cv::Point lpt(static_cast<int>(lookahead_model.x * scale_x),
-                          static_cast<int>(lookahead_model.y * scale_y));
+            cv::Point lpt_raw(static_cast<int>(lookahead_model.x * scale_x),
+                               static_cast<int>(lookahead_model.y * scale_y));
+
+            cv::Point p_near_lpt(static_cast<int>(primaryOf(all_peaks[2]).cx_frac * w),
+                                  static_cast<int>(cfg_.row_fractions[2] * h));
+            cv::Point p_mid_lpt (static_cast<int>(primaryOf(all_peaks[1]).cx_frac * w),
+                                  static_cast<int>(cfg_.row_fractions[1] * h));
+            const Peak & r0_pk_lpt = primaryOf(all_peaks[0]);
+            cv::Point p_far_lpt(static_cast<int>(r0_pk_lpt.cx_frac * w),
+                                 static_cast<int>(cfg_.row_fractions[0] * h));
+            const cv::Point * p_far_lpt_ptr =
+                (r0_pk_lpt.conf >= far_row_curve_thresh_) ? &p_far_lpt : nullptr;
+
+            auto curve_pts = sampleBranchCanvas(p_near_lpt, p_mid_lpt, p_far_lpt_ptr, 0, w-1, h);
+            cv::Point lpt = lpt_raw;
+            double best_d2 = std::numeric_limits<double>::max();
+            for (const auto & cp : curve_pts) {
+                double dx = cp.x - lpt_raw.x, dy = cp.y - lpt_raw.y;
+                double d2 = dx*dx + dy*dy;
+                if (d2 < best_d2) { best_d2 = d2; lpt = cp; }
+            }
+
             if (lpt.x >= 0 && lpt.x < w && lpt.y >= 0 && lpt.y < h) {
                 cv::circle(canvas, lpt, cr + 2, cv::Scalar(230, 200, 0),   2, cv::LINE_AA);  // cyan ring
                 cv::circle(canvas, lpt, dot_r,  cv::Scalar(255, 255, 255), cv::FILLED, cv::LINE_AA);
@@ -1045,7 +1079,7 @@ private:
             if (std::isnan(steering_curvature))
                 std::snprintf(speed_buf, sizeof(speed_buf), "curv=n/a  speed=%.1f", desired_speed);
             else
-                std::snprintf(speed_buf, sizeof(speed_buf), "curv=%.1f  speed=%.1f",
+                std::snprintf(speed_buf, sizeof(speed_buf), "curv=%.2f  speed=%.1f",
                               static_cast<double>(steering_curvature), desired_speed);
             std::snprintf(conf_buf,  sizeof(conf_buf),  "conf=%.1f",  adjusted_mean_conf);
 

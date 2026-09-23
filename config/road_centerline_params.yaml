@@ -36,7 +36,7 @@ road_centerline_node:
     # e.g. "~/ros2_ws/src/runtime_road_centerline_node/calibrations/flat_world_extrinsic.yaml"
     # e.g. "~/ros2_ws/src/runtime_road_centerline_node/calibrations/camera_intrinsics.yaml"
     flat_world_yaml:   "~/ros2_ws/src/runtime_road_centerline_node/calibrations/flat_world_extrinsic.yaml"      # path to flat_world_extrinsic.yaml from calibration tool
-    intrinsics_yaml:   "~/ros2_ws/src/runtime_road_centerline_node/calibrations/dumb_camera_intrinsics.yaml"      # DUMMY calibration for testing only — path to camera intrinsics yaml (ROS camera_info format)
+    intrinsics_yaml:   "~/ros2_ws/src/runtime_road_centerline_node/calibrations/adjusted_intrinsics.yaml"      # DUMMY calibration for testing only — path to camera intrinsics yaml (ROS camera_info format)
     lookahead_distance_m: 3.0  # pure-pursuit lookahead distance along the ground (m)
     forward_speed_mps:    0.0  # desired forward speed published in Twist.linear.x (m/s)
     vehicle_wheelbase_m:  0.3  # distance front-to-rear axle — used for steering angle display (m)
