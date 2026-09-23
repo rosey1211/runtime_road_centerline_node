@@ -1,0 +1,29 @@
+# Adjusted intrinsics — fx/fy scaled by 0.7898 (-21.0%) relative to the original intrinsics_yaml, found by fitting 3 calibration reference points (ground mark +
+# 2 tape ends). This is a diagnostic-derived adjustment, not an independent recalibration — treat it with appropriate caution, especially if the scale factor is
+# more than a percent or two from 1.0. cx/cy and distortion are unchanged from the original.
+image_width: 1920
+image_height: 1440
+camera_name: adjusted
+camera_matrix:
+  rows: 3
+  cols: 3
+  data:
+  - 1069.0808
+  - 0.0
+  - 922.5023
+  - 0.0
+  - 1066.6289
+  - 719.3271
+  - 0.0
+  - 0.0
+  - 1.0
+distortion_model: plumb_bob
+distortion_coefficients:
+  rows: 1
+  cols: 5
+  data:
+  - 0.084311
+  - -0.149512
+  - -0.001547
+  - -0.009211
+  - 0.0
