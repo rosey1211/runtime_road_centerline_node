@@ -39,7 +39,7 @@ road_centerline_node:
     intrinsics_yaml:   "~/ros2_ws/src/runtime_road_centerline_node/calibrations/adjusted_intrinsics.yaml"      # DUMMY calibration for testing only — path to camera intrinsics yaml (ROS camera_info format)
     lookahead_distance_m: 3.0  # pure-pursuit lookahead distance along the ground (m)
     forward_speed_mps:    0.0  # desired forward speed published in Twist.linear.x (m/s)
-    vehicle_wheelbase_m:  0.3  # distance front-to-rear axle — used for steering angle display (m)
+    vehicle_wheelbase_m:  0.269  # distance front-to-rear axle — used for steering angle display (m)
 
     # ── Speed determination (ControlMsg.desired_speed) ───────────────────────
     # desired_speed = maximum_speed * adjusted_mean_conf * curvature_bias_factor

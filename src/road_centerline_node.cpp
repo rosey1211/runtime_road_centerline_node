@@ -282,6 +282,7 @@ struct FlatWorldExtrinsic {
     double height_m   = 1.2;
     double pitch_deg  = 0.0;
     double roll_deg   = 0.0;
+    double yaw_deg     = 0.0;
     double x_offset_m = 0.0;
     double y_offset_m = 0.0;
 };
@@ -293,6 +294,7 @@ static FlatWorldExtrinsic loadExtrinsic(const std::string & path)
     e.height_m   = y["camera_height_m"].as<double>();
     e.pitch_deg  = y["camera_pitch_deg"].as<double>();
     e.roll_deg   = y["camera_roll_deg"].as<double>();
+    e.yaw_deg    = y["camera_yaw_deg"] ? y["camera_yaw_deg"].as<double>() : 0.0;
     e.x_offset_m = y["camera_x_offset_m"].as<double>();
     e.y_offset_m = y["camera_y_offset_m"].as<double>();
     return e;
@@ -331,8 +333,13 @@ static cv::Matx33d loadAndScaleK(const std::string & path, int model_w, int mode
 }
 
 // Rotation matrix: vehicle frame (X=fwd, Y=left, Z=up) → camera frame (X=right, Y=down, Z=fwd)
-// R = Rz(roll) @ Rx(pitch) @ R_base
-static cv::Matx33d buildRotation(double pitch_deg, double roll_deg)
+// R = Rz(roll) @ Rx(pitch) @ R_base @ Ryaw(yaw)
+// Yaw is applied first, in vehicle frame, about the vehicle's own up (Z)
+// axis — it's the camera's pan angle relative to the vehicle's forward
+// centerline. Positive yaw follows the right-hand rule about vehicle-Z
+// (camera panned toward the vehicle's left); flip the sign in the
+// calibration yaml if a given tool's convention comes out mirrored.
+static cv::Matx33d buildRotation(double pitch_deg, double roll_deg, double yaw_deg)
 {
     // Base: camera pointing straight ahead, perfectly level
     cv::Matx33d R_base(0, -1,  0,
@@ -341,8 +348,10 @@ static cv::Matx33d buildRotation(double pitch_deg, double roll_deg)
 
     double pitch = pitch_deg * M_PI / 180.0;
     double roll  = roll_deg  * M_PI / 180.0;
+    double yaw   = yaw_deg   * M_PI / 180.0;
     double cp = std::cos(pitch), sp = std::sin(pitch);
     double cr = std::cos(roll),  sr = std::sin(roll);
+    double cy = std::cos(yaw),   sy = std::sin(yaw);
 
     cv::Matx33d Rx(1,  0,   0,
                    0,  cp, -sp,
@@ -352,7 +361,11 @@ static cv::Matx33d buildRotation(double pitch_deg, double roll_deg)
                    sr,  cr,  0,
                    0,   0,   1);
 
-    return Rz * Rx * R_base;
+    cv::Matx33d Ryaw_vehicle(cy, -sy, 0,
+                              sy,  cy, 0,
+                              0,   0,  1);
+
+    return Rz * Rx * R_base * Ryaw_vehicle;
 }
 
 // Unproject a model-space pixel to the flat ground plane (Z=0 in vehicle frame).
@@ -554,11 +567,11 @@ public:
                 int mw = mc["image_width"].as<int>(), mh = mc["image_height"].as<int>();
                 extr_    = loadExtrinsic(fw);
                 K_model_ = loadAndScaleK(intr, mw, mh);
-                R_cam_   = buildRotation(extr_.pitch_deg, extr_.roll_deg);
+                R_cam_   = buildRotation(extr_.pitch_deg, extr_.roll_deg, extr_.yaw_deg);
                 flat_world_loaded_ = true;
                 RCLCPP_INFO(get_logger(),
-                    "Flat-world steering enabled  h=%.2f m  pitch=%.2f°  roll=%.2f°  lookahead=%.1f m",
-                    extr_.height_m, extr_.pitch_deg, extr_.roll_deg, lookahead_distance_m_);
+                    "Flat-world steering enabled  h=%.2f m  pitch=%.2f°  roll=%.2f°  yaw=%.2f°  lookahead=%.1f m",
+                    extr_.height_m, extr_.pitch_deg, extr_.roll_deg, extr_.yaw_deg, lookahead_distance_m_);
             } else if (fw_missing || intr_missing) {
                 RCLCPP_ERROR(get_logger(),
                     "\n"
